@@ -1,0 +1,10 @@
+
+# No subir fotografías cargadas durante las pruebas
+/uploads/*
+
+# Mantener la carpeta de imágenes
+!/uploads/.gitkeep
+
+# No publicar información de usuarios ni reportes de prueba
+/data/usuarios.json
+/data/reportes.json
