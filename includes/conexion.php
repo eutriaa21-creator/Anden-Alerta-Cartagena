@@ -1,18 +1,28 @@
-
 <?php
 
-// En este archivo dejamos preparados los datos para conectarnos
-// a la base de datos MySQL en la siguiente entrega.
+// Cargamos la configuración local de conexión.
+$config = require __DIR__ . '/config.local.php';
 
-// Dirección del servidor donde se encuentra la base de datos.
-$host = 'localhost';
+// Obtenemos los datos de conexión.
+$host = $config['host'];
+$puerto = $config['puerto'];
+$baseDatos = $config['baseDatos'];
+$usuario = $config['usuario'];
+$contrasena = $config['contrasena'];
 
-// Usuario que utilizaremos para acceder a MySQL.
-$usuario = 'root';
+try {
 
-// Contraseña del usuario de MySQL.
-// En nuestra configuración local de XAMPP está vacía.
-$contrasena = '';
+    $conexion = new PDO(
+        "mysql:host=$host;port=$puerto;dbname=$baseDatos;charset=utf8mb4",
+        $usuario,
+        $contrasena
+    );
 
-// Nombre de la base de datos que utilizaremos para el proyecto.
-$baseDatos = 'anden_alerta';
+    $conexion->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $conexion->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+
+} catch (PDOException $e) {
+
+    die("Error de conexión con la base de datos.");
+
+}

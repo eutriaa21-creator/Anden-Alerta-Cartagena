@@ -1,5 +1,4 @@
-
-# No subir fotografías cargadas durante las pruebas
+﻿# No subir fotografías cargadas durante las pruebas
 /uploads/*
 
 # Mantener la carpeta de imágenes
@@ -8,3 +7,6 @@
 # No publicar información de usuarios ni reportes de prueba
 /data/usuarios.json
 /data/reportes.json
+
+# Proteger credenciales locales de MySQL
+/includes/config.local.php

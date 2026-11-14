@@ -1,79 +1,98 @@
 
 <?php
-// Incluye el archivo que contiene las funciones de autenticación y manejo de sesión.
+
+// Incluye las funciones necesarias para manejar las sesiones y la autenticación.
 require_once __DIR__ . '/includes/funciones.php';
 
+// Incluye la conexión con la base de datos MySQL.
+require_once __DIR__ . '/includes/conexion.php';
+
 // Comprueba si el usuario ya inició sesión.
-// Si está autenticado, lo envía directamente a la página de reportes.
 if (usuarioAutenticado()) {
-    header('Location: reportes.php');
-    exit; // Detiene la ejecución del código.
-}
 
-// Variable que almacenará los mensajes de error del inicio de sesión.
-$error = '';
-
-// Comprueba si el formulario fue enviado mediante el método POST.
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-
-    // Obtiene el correo ingresado, elimina espacios y lo convierte a minúsculas.
-    $correo = strtolower(trim($_POST['correo'] ?? ''));
-
-    // Obtiene la contraseña ingresada por el usuario.
-    $contrasena = $_POST['contrasena'] ?? '';
-
-    // Comprueba si los datos corresponden al administrador predeterminado.
-    if ($correo === 'admin@anden.com' && $contrasena === 'admin123') {
-
-        // Guarda los datos del administrador en la sesión.
-        $_SESSION['usuario'] = [
-            'id' => 1,
-            'nombre' => 'Administrador',
-            'correo' => $correo,
-            'rol' => 'admin'
-        ];
-
-        // Redirige al administrador al panel de reportes.
+    // Comprueba el rol del usuario para dirigirlo a su página correspondiente.
+    if ($_SESSION['usuario']['rol'] === 'admin') {
         header('Location: admin/reportes.php');
-        exit;
+    } else {
+        header('Location: reportes.php');
     }
 
-    // Define la ubicación del archivo JSON donde se guardan los usuarios registrados.
-    $archivo = __DIR__ . '/data/usuarios.json';
+    exit;
+}
 
-    // Comprueba si el archivo de usuarios existe.
-    if (file_exists($archivo)) {
+// Variable que almacena los mensajes de error.
+$error = '';
 
-        // Lee el contenido del archivo JSON y lo convierte en un arreglo de PHP.
-        // Si no hay información válida, utiliza un arreglo vacío.
-        $usuarios = json_decode(file_get_contents($archivo), true) ?? [];
+// Comprueba si el formulario fue enviado mediante POST.
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-        // Recorre todos los usuarios registrados para buscar una coincidencia.
-        foreach ($usuarios as $usuario) {
+    // Obtiene el correo ingresado y lo convierte a minúsculas.
+    $correo = strtolower(trim($_POST['correo'] ?? ''));
 
-            // Compara el correo ingresado y verifica la contraseña cifrada.
-            if (
-                strtolower($usuario['correo']) === $correo &&
-                password_verify($contrasena, $usuario['contrasena'])
-            ) {
+    // Obtiene la contraseña ingresada.
+    $contrasena = $_POST['contrasena'] ?? '';
+
+    // Comprueba que los campos no estén vacíos.
+    if ($correo === '' || $contrasena === '') {
+
+        $error = 'Completa todos los campos.';
+
+    } else {
+
+        try {
+
+            // Busca al usuario en la base de datos mediante su correo.
+            $consulta = $conexion->prepare(
+                "SELECT id, nombre, correo, password, rol
+                 FROM usuarios
+                 WHERE correo = :correo
+                 LIMIT 1"
+            );
+
+            $consulta->execute([
+                ':correo' => $correo
+            ]);
+
+            // Obtiene los datos de la cuenta encontrada.
+            $usuario = $consulta->fetch();
+
+            // Comprueba si existe el usuario y si la contraseña es correcta.
+            if ($usuario && password_verify($contrasena, $usuario['password'])) {
+
+                // Regenera el identificador de sesión por seguridad.
+                session_regenerate_id(true);
 
                 // Guarda los datos del usuario en la sesión.
                 $_SESSION['usuario'] = [
                     'id' => $usuario['id'],
                     'nombre' => $usuario['nombre'],
                     'correo' => $usuario['correo'],
-                    'rol' => 'usuario'
+                    'rol' => $usuario['rol']
                 ];
 
-                // Si los datos son correctos, dirige al usuario a los reportes.
-                header('Location: reportes.php');
+                // Redirige según el rol de la cuenta.
+                if ($usuario['rol'] === 'admin') {
+                    header('Location: admin/reportes.php');
+                } else {
+                    header('Location: reportes.php');
+                }
+
                 exit;
+
+            } else {
+
+                // Muestra un mensaje si los datos son incorrectos.
+                $error = 'Correo o contraseña incorrectos.';
+
             }
+
+        } catch (PDOException $e) {
+
+            // Informa si ocurre un problema con la base de datos.
+            $error = 'No se pudo iniciar sesión. Inténtalo nuevamente.';
+
         }
     }
-
-    // Si no se encontró una cuenta con esos datos, muestra un mensaje de error.
-    $error = 'Correo o contraseña incorrectos.';
 }
 ?>
 
@@ -81,48 +100,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <html lang="es">
 
 <head>
-    <!-- Define la codificación para mostrar correctamente los caracteres y tildes. -->
     <meta charset="UTF-8">
-
-    <!-- Permite que la página se adapte al tamaño de pantalla de cada dispositivo. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <!-- Título que aparece en la pestaña del navegador. -->
     <title>Iniciar sesión | Andén Alerta Cartagena</title>
 
-    <!-- Conecta el archivo CSS encargado del diseño y los estilos de la página. -->
     <link rel="stylesheet" href="css/style.css">
 </head>
 
-<!-- Clase utilizada para aplicar los estilos específicos de la página de inicio de sesión. -->
 <body class="login-page">
 
-<!-- Contenedor principal que organiza los dos paneles de la pantalla. -->
 <div class="login-layout">
 
-    <!-- Panel izquierdo: contiene la identidad y presentación del proyecto. -->
     <section class="login-brand">
 
         <div class="brand-content">
 
-            <!-- Espacio destinado al logotipo de Andén Alerta. -->
             <div class="brand-icon">
                 <img src="img/logo.png" alt="Logo Andén Alerta">
             </div>
 
-            <!-- Nombre principal de la plataforma. -->
             <h1>Andén Alerta</h1>
 
-            <!-- Ciudad donde se desarrolla el proyecto. -->
             <span class="brand-location">CARTAGENA</span>
 
-            <!-- Elemento decorativo que funciona como separador visual. -->
             <div class="brand-line"></div>
 
-            <!-- Frase principal que representa el propósito de la plataforma. -->
             <h2>Tu ciudad también se construye caminando.</h2>
 
-            <!-- Descripción breve de la función de la página web. -->
             <p>
                 Reporta daños en andenes, obstáculos y problemas
                 de movilidad peatonal. Hagamos visible lo que
@@ -131,41 +136,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         </div>
 
-        <!-- Texto ubicado en la parte inferior del panel izquierdo. -->
         <div class="brand-footer">
             ANDÉN ALERTA CARTAGENA · 2026
         </div>
 
     </section>
 
-    <!-- Panel derecho: contiene el formulario para iniciar sesión. -->
     <section class="login-panel">
 
-        <!-- Tarjeta que agrupa los elementos del formulario. -->
         <div class="login-card">
 
-            <!-- Texto de bienvenida que aparece encima del formulario. -->
             <span class="login-eyebrow">BIENVENIDO</span>
 
-            <!-- Título del formulario. -->
             <h2>Iniciar sesión</h2>
 
-            <!-- Instrucción para el usuario. -->
             <p class="login-description">
                 Ingresa tus datos para continuar.
             </p>
 
-            <!-- Comprueba si existe un mensaje de error para mostrarlo en pantalla. -->
-            <?php if ($error): ?>
-                <div class="alert-error">
-                    <?= htmlspecialchars($error) ?>
+            <?php if (isset($_GET['registro']) && $_GET['registro'] === 'exitoso'): ?>
+                <div class="alert-success">
+                    Tu cuenta fue creada correctamente. Ahora puedes iniciar sesión.
                 </div>
             <?php endif; ?>
 
-            <!-- Formulario que envía los datos al mismo archivo mediante POST. -->
+            <?php if ($error): ?>
+                <div class="alert-error">
+                    <?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?>
+                </div>
+            <?php endif; ?>
+
             <form method="POST">
 
-                <!-- Etiqueta y campo para ingresar el correo electrónico. -->
                 <label for="correo">Correo electrónico</label>
                 <input
                     type="email"
@@ -175,7 +177,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     required
                 >
 
-                <!-- Etiqueta y campo para ingresar la contraseña. -->
                 <label for="contrasena">Contraseña</label>
                 <input
                     type="password"
@@ -185,14 +186,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     required
                 >
 
-                <!-- Botón que envía el formulario para validar las credenciales. -->
                 <button type="submit" class="login-submit">
                     Iniciar sesión
                 </button>
 
             </form>
 
-            <!-- Enlace que dirige al formulario de creación de una cuenta. -->
             <div class="login-register">
                 ¿Todavía no tienes una cuenta?
                 <a href="registro.php">Regístrate aquí</a>
@@ -200,7 +199,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         </div>
 
-        <!-- Texto informativo ubicado debajo de la tarjeta de inicio de sesión. -->
         <p class="login-copyright">
             Una iniciativa comunitaria para mejorar la movilidad peatonal.
         </p>
