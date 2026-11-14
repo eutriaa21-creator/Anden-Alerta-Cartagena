@@ -5,80 +5,139 @@
 require_once __DIR__ . '/../includes/funciones.php';
 requiereAdmin();
 
-// Ubicamos los archivos JSON donde guardamos los reportes y las categorías.
-$archivo = __DIR__ . '/../data/reportes.json';
-$archivoCategorias = __DIR__ . '/../data/categorias.json';
+// Conectamos el proyecto con la base de datos MySQL.
+require_once __DIR__ . '/../includes/conexion.php';
 
-// Cargamos los reportes guardados. Si el archivo no existe o está vacío, usamos un arreglo vacío.
-$reportes = file_exists($archivo)
-    ? (json_decode(file_get_contents($archivo), true) ?? [])
-    : [];
+// Consultamos las categorías disponibles en la base de datos.
+$consultaCategorias = $conexion->query(
+    "SELECT id, nombre FROM categorias ORDER BY nombre ASC"
+);
 
-// Hacemos lo mismo con las categorías disponibles para poder usarlas en los filtros.
-$categorias = file_exists($archivoCategorias)
-    ? (json_decode(file_get_contents($archivoCategorias), true) ?? [])
-    : [];
+$categorias = $consultaCategorias->fetchAll();
 
 // Revisamos si se envió una solicitud para eliminar un reporte.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['eliminar_id'])) {
 
-    // Convertimos el ID recibido a número entero para trabajar con él.
-    $idEliminar = (int) $_POST['eliminar_id'];
+    // Convertimos el ID recibido a número entero.
+    $idEliminar = filter_input(INPUT_POST, 'eliminar_id', FILTER_VALIDATE_INT);
 
-    // Buscamos dentro de los reportes cuál coincide con el ID que queremos eliminar.
-    foreach ($reportes as $indice => $reporte) {
-        if ((int) $reporte['id'] === $idEliminar) {
+    if ($idEliminar) {
 
-            // Si el reporte tiene una foto, también buscamos el archivo para eliminarlo.
-            if (!empty($reporte['foto'])) {
-                $rutaFoto = __DIR__ . '/../uploads/' . basename($reporte['foto']);
+        try {
+            // Buscamos la imagen asociada al reporte antes de eliminarlo.
+            $consultaImagen = $conexion->prepare(
+                "SELECT imagen FROM reportes WHERE id = ?"
+            );
 
-                // Comprobamos que la imagen exista antes de intentar borrarla.
-                if (is_file($rutaFoto)) {
-                    unlink($rutaFoto);
+            $consultaImagen->execute([$idEliminar]);
+            $reporteEliminar = $consultaImagen->fetch();
+
+            if ($reporteEliminar) {
+
+                // Eliminamos el reporte de la base de datos.
+                $eliminar = $conexion->prepare(
+                    "DELETE FROM reportes WHERE id = ?"
+                );
+
+                $eliminar->execute([$idEliminar]);
+
+                // Si el reporte tenía una imagen, también eliminamos el archivo.
+                if (!empty($reporteEliminar['imagen'])) {
+                    $rutaImagen = __DIR__ . '/../uploads/' . basename($reporteEliminar['imagen']);
+
+                    if (is_file($rutaImagen)) {
+                        unlink($rutaImagen);
+                    }
                 }
             }
-
-            // Quitamos el reporte del arreglo y reorganizamos sus posiciones.
-            unset($reportes[$indice]);
-            $reportes = array_values($reportes);
-
-            // Guardamos nuevamente el archivo JSON con los reportes actualizados.
-            file_put_contents(
-                $archivo,
-                json_encode($reportes, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE),
-                LOCK_EX
-            );
 
             // Volvemos al panel para mostrar la lista actualizada.
             header('Location: reportes.php');
             exit;
+
+        } catch (PDOException $e) {
+            die("No se pudo eliminar el reporte. Inténtalo nuevamente.");
         }
     }
 }
 
 // Recibimos los filtros que se seleccionaron en el panel.
-// Si no se seleccionó nada, las variables quedan vacías.
 $filtroCategoria = trim($_GET['categoria'] ?? '');
 $filtroFecha = trim($_GET['fecha'] ?? '');
 
-// Filtramos los reportes según la categoría y la fecha que haya seleccionado el administrador.
-$reportesFiltrados = array_filter($reportes, function ($reporte) use ($filtroCategoria, $filtroFecha) {
+// Consultamos la cantidad total de reportes.
+$totalReportes = (int) $conexion->query(
+    "SELECT COUNT(*) FROM reportes"
+)->fetchColumn();
 
-    // Revisamos si el reporte pertenece a la categoría seleccionada.
-    $coincideCategoria = $filtroCategoria === ''
-        || $reporte['categoria'] === $filtroCategoria;
+// Consultamos la cantidad de reportes pendientes.
+$consultaPendientes = $conexion->query(
+    "SELECT COUNT(*) FROM reportes WHERE estado = 'Pendiente'"
+);
 
-    // Obtenemos solamente la parte de la fecha para poder compararla con el filtro.
-    $fechaReporte = substr($reporte['fecha'] ?? '', 0, 10);
+$totalPendientes = (int) $consultaPendientes->fetchColumn();
 
-    // Comprobamos si la fecha del reporte coincide con la que se seleccionó.
-    $coincideFecha = $filtroFecha === ''
-        || $fechaReporte === $filtroFecha;
+// Consultamos la cantidad de reportes en revisión.
+$consultaRevision = $conexion->query(
+    "SELECT COUNT(*) FROM reportes WHERE estado = 'En revisión'"
+);
 
-    // El reporte se muestra cuando cumple con los dos filtros.
-    return $coincideCategoria && $coincideFecha;
-});
+$totalRevision = (int) $consultaRevision->fetchColumn();
+
+// Consultamos la cantidad de reportes atendidos.
+$consultaAtendidos = $conexion->query(
+    "SELECT COUNT(*) FROM reportes WHERE estado = 'Atendido'"
+);
+
+$totalAtendidos = (int) $consultaAtendidos->fetchColumn();
+
+// Construimos la consulta para mostrar los reportes y los datos de sus autores.
+$sql = "
+    SELECT
+        r.id,
+        c.nombre AS categoria,
+        r.sector,
+        u.nombre AS usuario_nombre,
+        u.correo AS usuario_correo,
+        r.estado,
+        r.fecha_reporte AS fecha
+    FROM reportes r
+    INNER JOIN categorias c ON r.categoria_id = c.id
+    INNER JOIN usuarios u ON r.usuario_id = u.id
+";
+
+$condiciones = [];
+$parametros = [];
+
+// Aplicamos el filtro por categoría si el administrador seleccionó una.
+if ($filtroCategoria !== '' && ctype_digit($filtroCategoria)) {
+    $condiciones[] = "r.categoria_id = ?";
+    $parametros[] = (int) $filtroCategoria;
+}
+
+// Aplicamos el filtro por fecha si se seleccionó una.
+if ($filtroFecha !== '') {
+    $fechaValida = DateTime::createFromFormat('Y-m-d', $filtroFecha);
+
+    if ($fechaValida && $fechaValida->format('Y-m-d') === $filtroFecha) {
+        $condiciones[] = "DATE(r.fecha_reporte) = ?";
+        $parametros[] = $filtroFecha;
+    }
+}
+
+// Agregamos las condiciones a la consulta.
+if (!empty($condiciones)) {
+    $sql .= " WHERE " . implode(" AND ", $condiciones);
+}
+
+// Mostramos primero los reportes más recientes.
+$sql .= " ORDER BY r.fecha_reporte DESC";
+
+// Ejecutamos la consulta con los filtros seleccionados.
+$consultaReportes = $conexion->prepare($sql);
+$consultaReportes->execute($parametros);
+
+$reportesFiltrados = $consultaReportes->fetchAll();
 
 // Incluimos la parte superior de la página, donde está el menú y el encabezado.
 require_once __DIR__ . '/../includes/header.php';
@@ -100,22 +159,22 @@ require_once __DIR__ . '/../includes/header.php';
 
         <div class="summary-card">
             <h3>Total de reportes</h3>
-            <p><?= count($reportes) ?></p>
+            <p><?= $totalReportes ?></p>
         </div>
 
         <div class="summary-card">
             <h3>Pendientes</h3>
-            <p><?= count(array_filter($reportes, fn($r) => $r['estado'] === 'Pendiente')) ?></p>
+            <p><?= $totalPendientes ?></p>
         </div>
 
         <div class="summary-card">
-            <h3>En proceso</h3>
-            <p><?= count(array_filter($reportes, fn($r) => $r['estado'] === 'En proceso')) ?></p>
+            <h3>En revisión</h3>
+            <p><?= $totalRevision ?></p>
         </div>
 
         <div class="summary-card">
-            <h3>Resueltos</h3>
-            <p><?= count(array_filter($reportes, fn($r) => $r['estado'] === 'Resuelto')) ?></p>
+            <h3>Atendidos</h3>
+            <p><?= $totalAtendidos ?></p>
         </div>
 
     </div>
@@ -128,9 +187,11 @@ require_once __DIR__ . '/../includes/header.php';
             <option value="">Todas las categorías</option>
 
             <?php foreach ($categorias as $categoria): ?>
-                <option value="<?= htmlspecialchars($categoria) ?>"
-                    <?= $filtroCategoria === $categoria ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($categoria) ?>
+                <option
+                    value="<?= (int) $categoria['id'] ?>"
+                    <?= $filtroCategoria === (string) $categoria['id'] ? 'selected' : '' ?>
+                >
+                    <?= htmlspecialchars($categoria['nombre']) ?>
                 </option>
             <?php endforeach; ?>
         </select>
@@ -157,7 +218,7 @@ require_once __DIR__ . '/../includes/header.php';
 
     <!-- Indicamos cuántos reportes coinciden con la búsqueda. -->
     <p class="filter-results">
-        Mostrando <?= count($reportesFiltrados) ?> de <?= count($reportes) ?> reportes
+        Mostrando <?= count($reportesFiltrados) ?> de <?= $totalReportes ?> reportes
     </p>
 
     <!-- Tabla donde el administrador puede consultar y gestionar los reportes. -->
@@ -184,7 +245,7 @@ require_once __DIR__ . '/../includes/header.php';
                     </tr>
                 <?php else: ?>
 
-                    <!-- Recorremos los reportes filtrados para mostrar cada uno en una fila. -->
+                    <!-- Recorremos los reportes consultados en MySQL para mostrar cada uno. -->
                     <?php foreach ($reportesFiltrados as $reporte): ?>
                         <tr>
                             <td><?= (int) $reporte['id'] ?></td>

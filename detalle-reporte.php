@@ -1,30 +1,61 @@
 
 <?php
+
+// Incluye las funciones necesarias para controlar las sesiones y los usuarios.
 require_once __DIR__ . '/includes/funciones.php';
+
+// Incluye la conexión con MySQL.
+require_once __DIR__ . '/includes/conexion.php';
+
+// Comprueba que el usuario haya iniciado sesión.
 requiereLogin();
 
-$archivo = __DIR__ . '/data/reportes.json';
-$reportes = file_exists($archivo)
-    ? (json_decode(file_get_contents($archivo), true) ?? [])
-    : [];
-
+// Obtiene el ID del reporte desde la URL.
 $id = (int)($_GET['id'] ?? 0);
-$reporte = null;
 
-foreach ($reportes as $item) {
-    if ((int)$item['id'] === $id) {
-        $reporte = $item;
-        break;
-    }
+// Comprueba que el ID sea válido.
+if ($id <= 0) {
+    http_response_code(404);
+    exit('Reporte no encontrado.');
 }
 
-$usuario = obtenerUsuario();
+// Consulta el reporte y relaciona su categoría y el ciudadano que lo creó.
+$consulta = $conexion->prepare(
+    "SELECT
+        r.id,
+        r.sector,
+        r.descripcion,
+        r.imagen,
+        r.estado,
+        r.fecha_reporte,
+        c.nombre AS categoria,
+        u.nombre AS usuario_nombre,
+        u.correo AS usuario_correo
+    FROM reportes r
+    INNER JOIN categorias c ON r.categoria_id = c.id
+    INNER JOIN usuarios u ON r.usuario_id = u.id
+    WHERE r.id = :id
+    LIMIT 1"
+);
 
+// Ejecuta la consulta.
+$consulta->execute([
+    ':id' => $id
+]);
+
+// Obtiene los datos del reporte.
+$reporte = $consulta->fetch();
+
+// Si el reporte no existe, muestra un error 404.
 if (!$reporte) {
     http_response_code(404);
     exit('Reporte no encontrado.');
 }
 
+// Obtiene los datos del usuario que inició sesión.
+$usuario = obtenerUsuario();
+
+// Incluye el encabezado general de la página.
 require_once __DIR__ . '/includes/header.php';
 ?>
 
@@ -41,9 +72,10 @@ require_once __DIR__ . '/includes/header.php';
 
 <section class="detail-container">
 
-    <?php if (!empty($reporte['foto'])): ?>
+    <!-- Muestra la fotografía del reporte, si existe. -->
+    <?php if (!empty($reporte['imagen'])): ?>
         <img
-            src="uploads/<?= htmlspecialchars($reporte['foto']) ?>"
+            src="uploads/<?= htmlspecialchars($reporte['imagen'], ENT_QUOTES, 'UTF-8') ?>"
             alt="Fotografía del daño"
             class="detail-image"
         >
@@ -51,29 +83,37 @@ require_once __DIR__ . '/includes/header.php';
 
     <div class="detail-content">
 
-        <h2><?= htmlspecialchars($reporte['categoria']) ?></h2>
+        <!-- Categoría del reporte. -->
+        <h2><?= htmlspecialchars($reporte['categoria'], ENT_QUOTES, 'UTF-8') ?></h2>
 
+        <!-- Estado actual del reporte. -->
         <p>
             <strong>Estado:</strong>
             <span class="status">
-                <?= htmlspecialchars($reporte['estado']) ?>
+                <?= htmlspecialchars($reporte['estado'], ENT_QUOTES, 'UTF-8') ?>
             </span>
         </p>
 
+        <!-- Sector donde se encuentra el problema. -->
         <p>
             <strong>Sector:</strong>
-            <?= htmlspecialchars($reporte['sector']) ?>
+            <?= htmlspecialchars($reporte['sector'], ENT_QUOTES, 'UTF-8') ?>
         </p>
 
+        <!-- Descripción completa del problema. -->
         <p><strong>Descripción:</strong></p>
 
-        <p><?= nl2br(htmlspecialchars($reporte['descripcion'])) ?></p>
-
         <p>
-            <strong>Fecha:</strong>
-            <?= htmlspecialchars($reporte['fecha']) ?>
+            <?= nl2br(htmlspecialchars($reporte['descripcion'], ENT_QUOTES, 'UTF-8')) ?>
         </p>
 
+        <!-- Fecha de creación del reporte. -->
+        <p>
+            <strong>Fecha:</strong>
+            <?= htmlspecialchars($reporte['fecha_reporte'], ENT_QUOTES, 'UTF-8') ?>
+        </p>
+
+        <!-- La información del ciudadano solamente aparece para administradores. -->
         <?php if (esAdmin()): ?>
 
             <div class="report-user-info">
@@ -81,12 +121,12 @@ require_once __DIR__ . '/includes/header.php';
 
                 <p>
                     <strong>Nombre:</strong>
-                    <?= htmlspecialchars($reporte['usuario_nombre']) ?>
+                    <?= htmlspecialchars($reporte['usuario_nombre'], ENT_QUOTES, 'UTF-8') ?>
                 </p>
 
                 <p>
                     <strong>Correo:</strong>
-                    <?= htmlspecialchars($reporte['usuario_correo']) ?>
+                    <?= htmlspecialchars($reporte['usuario_correo'], ENT_QUOTES, 'UTF-8') ?>
                 </p>
             </div>
 
@@ -102,4 +142,7 @@ require_once __DIR__ . '/includes/header.php';
     </div>
 </section>
 
-<?php require_once __DIR__ . '/includes/footer.php'; ?>
+<?php
+// Incluye el pie de página.
+require_once __DIR__ . '/includes/footer.php';
+?>

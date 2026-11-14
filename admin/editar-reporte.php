@@ -1,89 +1,125 @@
 
 <?php
 
-// Incluimos las funciones del proyecto y comprobamos que sea administrador.
+// Incluye las funciones del proyecto y comprueba que sea administrador.
 require_once __DIR__ . '/../includes/funciones.php';
 requiereAdmin();
 
-// Ubicamos el archivo donde tenemos guardados todos los reportes.
-$archivo = __DIR__ . '/../data/reportes.json';
+// Incluye la conexión con MySQL.
+require_once __DIR__ . '/../includes/conexion.php';
 
-// Cargamos los reportes desde el archivo JSON.
-// Si no existe o no tiene información válida, dejamos un arreglo vacío.
-$reportes = file_exists($archivo)
-    ? (json_decode(file_get_contents($archivo), true) ?? [])
-    : [];
-
-// Recibimos el ID del reporte que queremos editar.
+// Obtiene el ID del reporte desde la URL.
 $id = (int)($_GET['id'] ?? 0);
-$indiceReporte = null;
 
-// Buscamos el reporte dentro del arreglo usando el ID recibido.
-foreach ($reportes as $indice => $item) {
-    if ((int)$item['id'] === $id) {
-        $indiceReporte = $indice;
-        break;
-    }
-}
-
-// Si no encontramos el reporte, mostramos un error 404 y detenemos el archivo.
-if ($indiceReporte === null) {
+// Comprueba que el ID sea válido.
+if ($id <= 0) {
     http_response_code(404);
     exit('Reporte no encontrado.');
 }
 
-// Esta variable nos sirve para mostrar mensajes cuando hay algún error.
+// Consulta las categorías disponibles en MySQL.
+$consultaCategorias = $conexion->query(
+    "SELECT id, nombre FROM categorias ORDER BY nombre ASC"
+);
+
+$categorias = $consultaCategorias->fetchAll();
+
+// Consulta el reporte que se desea editar.
+$consultaReporte = $conexion->prepare(
+    "SELECT * FROM reportes WHERE id = :id LIMIT 1"
+);
+
+$consultaReporte->execute([
+    ':id' => $id
+]);
+
+$reporte = $consultaReporte->fetch();
+
+// Si el reporte no existe, muestra un error 404.
+if (!$reporte) {
+    http_response_code(404);
+    exit('Reporte no encontrado.');
+}
+
+// Variable para mostrar los mensajes de error.
 $error = '';
 
-// Revisamos si el formulario fue enviado.
+// Estados permitidos por la base de datos.
+$estadosPermitidos = ['Pendiente', 'En revisión', 'Atendido'];
+
+// Comprueba si el formulario fue enviado.
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    // Recibimos los datos que el administrador escribió en el formulario.
-    $categoria = trim($_POST['categoria'] ?? '');
+    // Obtiene los datos enviados por el administrador.
+    $categoriaId = filter_input(INPUT_POST, 'categoria', FILTER_VALIDATE_INT);
     $sector = trim($_POST['sector'] ?? '');
     $descripcion = trim($_POST['descripcion'] ?? '');
     $estado = $_POST['estado'] ?? '';
 
-    // Estos son los únicos estados que se pueden asignar a un reporte.
-    $estadosPermitidos = ['Pendiente', 'En proceso', 'Resuelto'];
+    // Comprueba que la categoría seleccionada exista.
+    $categoriaValida = false;
 
-    // Comprobamos que los campos principales no estén vacíos.
-    if ($categoria === '' || $sector === '' || $descripcion === '') {
+    foreach ($categorias as $categoria) {
+        if ((int)$categoria['id'] === (int)$categoriaId) {
+            $categoriaValida = true;
+            break;
+        }
+    }
+
+    if (!$categoriaValida) {
+        $error = 'Selecciona una categoría válida.';
+
+    } elseif ($sector === '' || $descripcion === '') {
         $error = 'Completa todos los campos.';
 
-    // Verificamos que el estado seleccionado esté dentro de los permitidos.
     } elseif (!in_array($estado, $estadosPermitidos, true)) {
         $error = 'Selecciona un estado válido.';
 
     } else {
 
-        // Actualizamos la información del reporte que encontramos anteriormente.
-        $reportes[$indiceReporte]['categoria'] = $categoria;
-        $reportes[$indiceReporte]['sector'] = $sector;
-        $reportes[$indiceReporte]['descripcion'] = $descripcion;
-        $reportes[$indiceReporte]['estado'] = $estado;
+        try {
 
-        // Guardamos los cambios en el archivo JSON.
-        file_put_contents(
-            $archivo,
-            json_encode($reportes, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE),
-            LOCK_EX
-        );
+            // Actualiza los datos del reporte directamente en MySQL.
+            $actualizar = $conexion->prepare(
+                "UPDATE reportes
+                SET categoria_id = :categoria_id,
+                    sector = :sector,
+                    descripcion = :descripcion,
+                    estado = :estado
+                WHERE id = :id"
+            );
 
-        // Cuando terminamos, volvemos al panel de reportes.
-        header('Location: reportes.php');
-        exit;
+            // Ejecuta la actualización con los nuevos valores.
+            $actualizar->execute([
+                ':categoria_id' => $categoriaId,
+                ':sector' => $sector,
+                ':descripcion' => $descripcion,
+                ':estado' => $estado,
+                ':id' => $id
+            ]);
+
+            // Regresa al panel administrativo.
+            header('Location: reportes.php');
+            exit;
+
+        } catch (PDOException $e) {
+            $error = 'No se pudieron guardar los cambios. Inténtalo nuevamente.';
+        }
     }
+
+    // Actualiza los datos que se muestran en el formulario.
+    // Así no se pierden los valores si ocurre algún error.
+    $reporte['categoria_id'] = $categoriaId;
+    $reporte['sector'] = $sector;
+    $reporte['descripcion'] = $descripcion;
+    $reporte['estado'] = $estado;
 }
 
-// Guardamos los datos actuales del reporte para mostrarlos en el formulario.
-$reporte = $reportes[$indiceReporte];
-
-// Incluimos el encabezado general de la página.
+// Incluye el encabezado general de la página.
 require_once __DIR__ . '/../includes/header.php';
 ?>
 
-<!-- Mostramos el título de la página y el ID del reporte que estamos editando. -->
+<!-- Encabezado de la página de edición. -->
 <section class="page-heading">
     <div>
         <h1>Editar reporte #<?= (int)$reporte['id'] ?></h1>
@@ -91,54 +127,92 @@ require_once __DIR__ . '/../includes/header.php';
     </div>
 </section>
 
-<!-- Contenedor donde se encuentra el formulario de edición. -->
+<!-- Contenedor del formulario. -->
 <section class="form-container">
 
-    <!-- Si ocurrió algún error, mostramos el mensaje correspondiente. -->
+    <!-- Muestra los errores si existen. -->
     <?php if ($error): ?>
-        <div class="alert-error"><?= htmlspecialchars($error) ?></div>
+        <div class="alert-error">
+            <?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?>
+        </div>
     <?php endif; ?>
 
-    <!-- Formulario para modificar los datos del reporte. -->
+    <!-- Formulario para actualizar el reporte. -->
     <form method="POST" class="main-form">
 
-        <!-- Campo para cambiar la categoría del reporte. -->
+        <!-- Selector de categorías disponibles en MySQL. -->
         <label for="categoria">Categoría</label>
-        <input type="text" name="categoria" id="categoria"
-            value="<?= htmlspecialchars($reporte['categoria']) ?>" required>
 
-        <!-- Campo para modificar el sector donde se encuentra el problema. -->
-        <label for="sector">Sector</label>
-        <input type="text" name="sector" id="sector"
-            value="<?= htmlspecialchars($reporte['sector']) ?>" required>
+        <select name="categoria" id="categoria" required>
 
-        <!-- Campo para actualizar la descripción del problema. -->
-        <label for="descripcion">Descripción</label>
-        <textarea name="descripcion" id="descripcion" rows="5"
-            required><?= htmlspecialchars($reporte['descripcion']) ?></textarea>
+            <option value="">Selecciona una categoría</option>
 
-        <!-- Selector para cambiar el estado actual del reporte. -->
-        <label for="estado">Estado del reporte</label>
-        <select name="estado" id="estado" required>
+            <?php foreach ($categorias as $categoria): ?>
 
-            <!-- Mostramos los estados disponibles y dejamos seleccionado el actual. -->
-            <?php foreach (['Pendiente', 'En proceso', 'Resuelto'] as $estado): ?>
-                <option value="<?= $estado ?>"
-                    <?= $reporte['estado'] === $estado ? 'selected' : '' ?>>
-                    <?= $estado ?>
+                <option
+                    value="<?= (int)$categoria['id'] ?>"
+                    <?= (string)$reporte['categoria_id'] === (string)$categoria['id'] ? 'selected' : '' ?>
+                >
+                    <?= htmlspecialchars($categoria['nombre'], ENT_QUOTES, 'UTF-8') ?>
                 </option>
+
             <?php endforeach; ?>
 
         </select>
 
-        <!-- Botón para guardar los cambios realizados. -->
-        <button type="submit" class="btn-primary">Guardar cambios</button>
+        <!-- Campo para modificar el sector. -->
+        <label for="sector">Sector</label>
 
-        <!-- Enlace para salir sin guardar y volver al panel. -->
-        <a href="reportes.php" class="btn-secondary">Cancelar</a>
+        <input
+            type="text"
+            name="sector"
+            id="sector"
+            value="<?= htmlspecialchars($reporte['sector'], ENT_QUOTES, 'UTF-8') ?>"
+            required
+        >
+
+        <!-- Campo para modificar la descripción. -->
+        <label for="descripcion">Descripción</label>
+
+        <textarea
+            name="descripcion"
+            id="descripcion"
+            rows="5"
+            required
+        ><?= htmlspecialchars($reporte['descripcion'], ENT_QUOTES, 'UTF-8') ?></textarea>
+
+        <!-- Selector para cambiar el estado del reporte. -->
+        <label for="estado">Estado del reporte</label>
+
+        <select name="estado" id="estado" required>
+
+            <?php foreach ($estadosPermitidos as $estado): ?>
+
+                <option
+                    value="<?= htmlspecialchars($estado, ENT_QUOTES, 'UTF-8') ?>"
+                    <?= $reporte['estado'] === $estado ? 'selected' : '' ?>
+                >
+                    <?= htmlspecialchars($estado, ENT_QUOTES, 'UTF-8') ?>
+                </option>
+
+            <?php endforeach; ?>
+
+        </select>
+
+        <!-- Botón para guardar los cambios. -->
+        <button type="submit" class="btn-primary">
+            Guardar cambios
+        </button>
+
+        <!-- Enlace para cancelar la edición. -->
+        <a href="reportes.php" class="btn-secondary">
+            Cancelar
+        </a>
 
     </form>
 </section>
 
-<!-- Incluimos el pie de página general del proyecto. -->
-<?php require_once __DIR__ . '/../includes/footer.php'; ?>
+<?php
+// Incluye el pie de página general.
+require_once __DIR__ . '/../includes/footer.php';
+?>
