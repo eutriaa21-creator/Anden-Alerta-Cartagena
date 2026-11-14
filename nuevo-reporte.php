@@ -1,7 +1,11 @@
 
 <?php
+
 // Incluye las funciones necesarias para controlar las sesiones y los usuarios.
 require_once __DIR__ . '/includes/funciones.php';
+
+// Incluye la conexión con la base de datos MySQL.
+require_once __DIR__ . '/includes/conexion.php';
 
 // Comprueba que el ciudadano haya iniciado sesión.
 requiereLogin();
@@ -12,78 +16,71 @@ if (esAdmin()) {
     exit;
 }
 
-// Define la ubicación del archivo JSON que contiene las categorías disponibles.
-$archivoCategorias = __DIR__ . '/data/categorias.json';
+// Obtiene las categorías disponibles desde MySQL.
+$consultaCategorias = $conexion->query(
+    "SELECT id, nombre FROM categorias ORDER BY nombre ASC"
+);
 
-// Comprueba si el archivo de categorías existe.
-// Si existe, lee su contenido y lo convierte en un arreglo.
-// Si no existe, utiliza un arreglo vacío.
-$categorias = file_exists($archivoCategorias)
-    ? (json_decode(file_get_contents($archivoCategorias), true) ?? [])
-    : [];
+$categorias = $consultaCategorias->fetchAll();
 
 // Variable que almacena los mensajes de error del formulario.
 $error = '';
 
-// Comprueba si el formulario fue enviado mediante el método POST.
+// Comprueba si el formulario fue enviado mediante POST.
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    // Obtiene la categoría seleccionada y elimina los espacios sobrantes.
-    $categoria = trim($_POST['categoria'] ?? '');
+    // Obtiene la categoría seleccionada.
+    $categoriaId = filter_input(INPUT_POST, 'categoria', FILTER_VALIDATE_INT);
 
-    // Obtiene el sector o ubicación del problema.
+    // Obtiene el sector y la descripción.
     $sector = trim($_POST['sector'] ?? '');
-
-    // Obtiene la descripción escrita por el ciudadano.
     $descripcion = trim($_POST['descripcion'] ?? '');
 
-    // Comprueba que la categoría seleccionada exista en el archivo de categorías.
-    if (!in_array($categoria, $categorias, true)) {
+    // Comprueba que la categoría seleccionada exista en MySQL.
+    $categoriaValida = false;
+
+    foreach ($categorias as $categoria) {
+        if ((int)$categoria['id'] === (int)$categoriaId) {
+            $categoriaValida = true;
+            break;
+        }
+    }
+
+    if (!$categoriaValida) {
         $error = 'Selecciona una categoría válida.';
 
-    // Comprueba que el sector y la descripción no estén vacíos.
     } elseif ($sector === '' || $descripcion === '') {
         $error = 'Completa todos los campos obligatorios.';
 
     } else {
 
-        // Define la ubicación del archivo JSON donde se guardan los reportes.
-        $archivo = __DIR__ . '/data/reportes.json';
-
-        // Lee los reportes existentes y los convierte en un arreglo.
-        // Si el archivo no existe, comienza con un arreglo vacío.
-        $reportes = file_exists($archivo)
-            ? (json_decode(file_get_contents($archivo), true) ?? [])
-            : [];
-
         // Variable que almacena el nombre de la fotografía.
-        // Comienza vacía porque la fotografía es opcional.
-        $fotoNombre = '';
+        $fotoNombre = null;
 
-        // Comprueba si se seleccionó una fotografía en el formulario.
+        // Comprueba si se seleccionó una fotografía.
         if (isset($_FILES['foto']) && $_FILES['foto']['error'] !== UPLOAD_ERR_NO_FILE) {
 
-            // Comprueba si ocurrió algún error durante la carga de la fotografía.
+            // Comprueba si ocurrió algún error al subir la fotografía.
             if ($_FILES['foto']['error'] !== UPLOAD_ERR_OK) {
                 $error = 'No se pudo subir la fotografía.';
 
             } else {
 
-                // Detecta el tipo MIME real del archivo temporal.
+                // Detecta el tipo MIME real del archivo.
                 $tipo = mime_content_type($_FILES['foto']['tmp_name']);
 
-                // Define los formatos de imagen permitidos y su extensión correspondiente.
+                // Define los formatos de imagen permitidos.
                 $tiposPermitidos = [
                     'image/jpeg' => 'jpg',
                     'image/png' => 'png',
                     'image/webp' => 'webp'
                 ];
 
-                // Comprueba que la fotografía tenga un formato permitido.
+                // Comprueba que el archivo sea una imagen permitida.
                 if (!isset($tiposPermitidos[$tipo])) {
                     $error = 'La fotografía debe ser JPG, PNG o WEBP.';
 
-                // Comprueba que el tamaño de la fotografía no supere los 5 MB.
+                // Comprueba que el tamaño no supere los 5 MB.
                 } elseif ($_FILES['foto']['size'] > 5 * 1024 * 1024) {
                     $error = 'La fotografía no puede superar los 5 MB.';
 
@@ -92,106 +89,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // Define la carpeta donde se almacenarán las fotografías.
                     $carpeta = __DIR__ . '/uploads';
 
-                    // Si la carpeta no existe, la crea.
+                    // Crea la carpeta si todavía no existe.
                     if (!is_dir($carpeta)) {
                         mkdir($carpeta, 0775, true);
                     }
 
-                    // Genera un nombre único para evitar que dos fotografías tengan el mismo nombre.
-                    // También agrega la extensión correspondiente al formato de la imagen.
-                    $fotoNombre = uniqid('reporte_', true) . '.' . $tiposPermitidos[$tipo];
+                    // Genera un nombre único para la fotografía.
+                    $fotoNombre = bin2hex(random_bytes(16)) . '.' . $tiposPermitidos[$tipo];
 
-                    // Mueve la fotografía temporal a la carpeta uploads.
+                    // Mueve la fotografía a la carpeta uploads.
                     if (!move_uploaded_file(
                         $_FILES['foto']['tmp_name'],
                         $carpeta . '/' . $fotoNombre
                     )) {
-
-                        // Si no se pudo mover la fotografía, muestra un mensaje de error.
                         $error = 'No se pudo guardar la fotografía.';
+                        $fotoNombre = null;
                     }
                 }
             }
         }
 
-        // Si no hay errores, continúa con la creación del reporte.
+        // Si no existen errores, guarda el reporte en MySQL.
         if ($error === '') {
 
             // Obtiene los datos del ciudadano que inició sesión.
             $usuario = obtenerUsuario();
 
-            // Construye un arreglo con toda la información del nuevo reporte.
-            $nuevoReporte = [
+            try {
 
-                // Calcula el siguiente ID disponible.
-                // Si no existen reportes, comienza desde el número 1.
-                'id' => count($reportes) > 0
-                    ? max(array_column($reportes, 'id')) + 1
-                    : 1,
+                // Prepara la consulta para insertar el nuevo reporte.
+                $insertar = $conexion->prepare(
+                    "INSERT INTO reportes
+                    (usuario_id, categoria_id, sector, descripcion, imagen, estado)
+                    VALUES
+                    (:usuario_id, :categoria_id, :sector, :descripcion, :imagen, 'Pendiente')"
+                );
 
-                // Guarda el ID del ciudadano que realizó el reporte.
-                'usuario_id' => $usuario['id'],
+                // Ejecuta la consulta con los datos del reporte.
+                $insertar->execute([
+                    ':usuario_id' => $usuario['id'],
+                    ':categoria_id' => $categoriaId,
+                    ':sector' => $sector,
+                    ':descripcion' => $descripcion,
+                    ':imagen' => $fotoNombre
+                ]);
 
-                // Guarda el nombre del ciudadano que realizó el reporte.
-                'usuario_nombre' => $usuario['nombre'],
-
-                // Guarda el correo del ciudadano que realizó el reporte.
-                'usuario_correo' => $usuario['correo'],
-
-                // Guarda la categoría del daño seleccionado.
-                'categoria' => $categoria,
-
-                // Guarda el sector o ubicación del problema.
-                'sector' => $sector,
-
-                // Guarda la descripción del problema.
-                'descripcion' => $descripcion,
-
-                // Guarda el nombre de la fotografía, si se adjuntó alguna.
-                'foto' => $fotoNombre,
-
-                // Establece el estado inicial del reporte.
-                'estado' => 'Pendiente',
-
-                // Registra la fecha y hora en la que se creó el reporte.
-                'fecha' => date('Y-m-d H:i:s')
-            ];
-
-            // Agrega el nuevo reporte al arreglo de reportes existentes.
-            $reportes[] = $nuevoReporte;
-
-            // Convierte todos los reportes a formato JSON y los guarda en el archivo.
-            // JSON_PRETTY_PRINT organiza el contenido para facilitar su lectura.
-            // JSON_UNESCAPED_UNICODE conserva las tildes y caracteres especiales.
-            // LOCK_EX evita que otros procesos escriban en el archivo al mismo tiempo.
-            $guardado = file_put_contents(
-                $archivo,
-                json_encode($reportes, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE),
-                LOCK_EX
-            );
-
-            // Comprueba si el reporte se guardó correctamente.
-            if ($guardado !== false) {
-
-                // Redirige al ciudadano a la página donde se muestran los reportes.
+                // Redirige al ciudadano a la lista de reportes.
                 header('Location: reportes.php');
                 exit;
 
-            } else {
+            } catch (PDOException $e) {
 
-                // Muestra un mensaje si ocurrió un problema al guardar el reporte.
-                $error = 'No se pudo guardar el reporte.';
+                // Si falla el registro, elimina la fotografía que se había subido.
+                if ($fotoNombre !== null && file_exists(__DIR__ . '/uploads/' . $fotoNombre)) {
+                    unlink(__DIR__ . '/uploads/' . $fotoNombre);
+                }
+
+                // Muestra un mensaje de error.
+                $error = 'No se pudo guardar el reporte. Inténtalo nuevamente.';
             }
         }
     }
 }
 
 // Incluye el encabezado general de la página.
-// Contiene elementos compartidos, como la navegación.
 require_once __DIR__ . '/includes/header.php';
 ?>
 
-<!-- Encabezado que presenta el formulario de creación de reportes. -->
+<!-- Encabezado del formulario de creación de reportes. -->
 <section class="page-heading">
     <div>
         <h1>Crear nuevo reporte</h1>
@@ -199,18 +164,17 @@ require_once __DIR__ . '/includes/header.php';
     </div>
 </section>
 
-<!-- Contenedor principal del formulario de registro de problemas. -->
+<!-- Contenedor principal del formulario. -->
 <section class="form-container">
 
-    <!-- Si existe un error, lo muestra encima del formulario. -->
+    <!-- Muestra los mensajes de error si existen. -->
     <?php if ($error): ?>
         <div class="alert-error">
-            <?= htmlspecialchars($error) ?>
+            <?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?>
         </div>
     <?php endif; ?>
 
-    <!-- Formulario que envía los datos mediante POST.
-         multipart/form-data permite adjuntar fotografías. -->
+    <!-- Formulario para registrar un reporte y adjuntar una fotografía. -->
     <form method="POST" enctype="multipart/form-data" class="main-form">
 
         <!-- Campo para seleccionar la categoría del daño. -->
@@ -218,49 +182,48 @@ require_once __DIR__ . '/includes/header.php';
 
         <select name="categoria" id="categoria" required>
 
-            <!-- Opción inicial que solicita seleccionar una categoría. -->
             <option value="">Selecciona una categoría</option>
 
-            <!-- Recorre las categorías guardadas por el administrador. -->
+            <!-- Muestra las categorías almacenadas en MySQL. -->
             <?php foreach ($categorias as $categoria): ?>
 
-                <!-- Crea una opción por cada categoría disponible.
-                     Mantiene seleccionada la categoría anterior si hubo un error. -->
-                <option value="<?= htmlspecialchars($categoria) ?>"
-                    <?= ($_POST['categoria'] ?? '') === $categoria ? 'selected' : '' ?>>
-
-                    <!-- Muestra el nombre de la categoría. -->
-                    <?= htmlspecialchars($categoria) ?>
-
+                <option
+                    value="<?= (int)$categoria['id'] ?>"
+                    <?= (string)($_POST['categoria'] ?? '') === (string)$categoria['id'] ? 'selected' : '' ?>
+                >
+                    <?= htmlspecialchars($categoria['nombre'], ENT_QUOTES, 'UTF-8') ?>
                 </option>
+
             <?php endforeach; ?>
 
         </select>
 
-        <!-- Campo para ingresar el sector o ubicación del problema. -->
+        <!-- Campo para ingresar el sector del problema. -->
         <label for="sector">Sector o ubicación</label>
+
         <input
             type="text"
             name="sector"
             id="sector"
             placeholder="Ej. Alameda de la Victoria"
-            value="<?= htmlspecialchars($_POST['sector'] ?? '') ?>"
+            value="<?= htmlspecialchars($_POST['sector'] ?? '', ENT_QUOTES, 'UTF-8') ?>"
             required
         >
 
-        <!-- Campo de texto para describir detalladamente el problema encontrado. -->
+        <!-- Campo para describir el problema encontrado. -->
         <label for="descripcion">Descripción del problema</label>
+
         <textarea
             name="descripcion"
             id="descripcion"
             rows="5"
             placeholder="Describe el daño que encontraste..."
             required
-        ><?= htmlspecialchars($_POST['descripcion'] ?? '') ?></textarea>
+        ><?= htmlspecialchars($_POST['descripcion'] ?? '', ENT_QUOTES, 'UTF-8') ?></textarea>
 
-        <!-- Campo para adjuntar una fotografía del daño.
-             La imagen es opcional y solo acepta JPG, PNG y WEBP. -->
+        <!-- Campo opcional para adjuntar una fotografía. -->
         <label for="foto">Fotografía del daño (opcional)</label>
+
         <input
             type="file"
             name="foto"
@@ -268,12 +231,12 @@ require_once __DIR__ . '/includes/header.php';
             accept="image/jpeg,image/png,image/webp"
         >
 
-        <!-- Botón que envía el formulario para registrar el nuevo reporte. -->
+        <!-- Botón para enviar el reporte. -->
         <button type="submit" class="btn-primary">
             Enviar reporte
         </button>
 
-        <!-- Enlace para cancelar el registro y regresar a los reportes. -->
+        <!-- Enlace para cancelar el registro. -->
         <a href="reportes.php" class="btn-secondary">
             Cancelar
         </a>
