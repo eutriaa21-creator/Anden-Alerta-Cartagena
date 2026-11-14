@@ -8,3 +8,6 @@
 # No publicar información de usuarios ni reportes de prueba
 /data/usuarios.json
 /data/reportes.json
+
+# No subir las credenciales locales de MySQL
+/includes/config.local.php
